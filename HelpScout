@@ -1,0 +1,172 @@
+
+with 
+NewStat as(
+
+SELECT distinct
+a.[company id]
+,max(CASE WHEN CountRankMax=1 THEN [Daily Stats User Count] ELSE NULL END) AS MaxUsers
+,min(CASE WHEN CountRankMin=1 THEN [Daily Stats User Count] ELSE NULL END) AS MinUsers
+,max(CASE WHEN DateRankMax=1 THEN [Daily Stats Stat Date] ELSE NULL END) AS MaxDate
+,min(CASE WHEN DateRankMin=1 THEN [Daily Stats Stat Date] ELSE NULL END) AS MinDate
+,max(case when [Company Close Date] is not null then [Company Close Date] end) as [Company Close Date]
+,max(case when ClosingUserCount is not null then ClosingUserCount end) as ClosingUserCount
+,max(case when ClosingUserCount is not null and ClosingUserCount >=11 then 1 else 0 end) as RefertoSalesBit
+,max(ExpectedCount) ExpectedCount
+,MIN(statdate) as EarliestDateCountReached
+,DATEDIFF(day, max([Company Close Date]),MIN(statdate)) as BeforeorAfterClosingHavingMaxUsers_Days
+from(
+select  
+dstat.[company id]
+,[Daily Stats User Count]=cast([Daily Stats User Count] as int)
+,DENSE_RANK() OVER (PARTITION BY dstat.[company id] ORDER BY cast(dstat.[Daily Stats User Count] as int) DESC) AS CountRankMax
+,DENSE_RANK() OVER (PARTITION BY dstat.[company id] ORDER BY cast(dstat.[Daily Stats User Count]as int) asc) AS CountRankMin
+,dstat.[Daily Stats Stat Date]
+,DENSE_RANK() OVER (PARTITION BY dstat.[company id] ORDER BY dstat.[Daily Stats Stat Date] DESC) AS DateRankMax
+,DENSE_RANK() OVER (PARTITION BY dstat.[company id] ORDER BY dstat.[Daily Stats Stat Date] asc) AS DateRankMin
+,[Company Close Date]
+,case when [Company Close Date] is not null then cast(dstat.[Daily Stats User Count]as int) else null end as ClosingUserCount
+,case when [Company Close Date] is not null then [Marketing Data Expected User Count Simplified] else null end as ExpectedCount
+from [daily-user-stats] dstat
+left join companydetails cd
+on cd.[company id]=dstat.[company id]
+and cd.[Company Close Date]=dstat.[Daily Stats Stat Date]
+)a
+left join(
+select A.[company id]
+, A.[Daily Stats User Count] maxcount
+, A.[Daily Stats Stat Date] statdate
+,DENSE_RANK() OVER (PARTITION BY [company id] ORDER BY [Daily Stats Stat Date] desc) as rankearliestdt
+    from [daily-user-stats] A
+    where [Daily Stats User Count] = 
+        (select max(CAST([Daily Stats User Count] AS INT)) from [daily-user-stats] D where A.[company id]=D.[company id])
+
+) dstat2
+
+on a.[company id]=dstat2.[company id]
+and cast(a.[Daily Stats User Count]as int)=cast(dstat2.maxcount as int)
+group by a.[company id]),
+
+finaltableSEN AS (
+
+select *
+,MaxUsers-ClosingUserCount as GrowthUsersFromClosingActual
+,cast((MaxUsers-ClosingUserCount)as float)/cast(ClosingUserCount as float) as GrowthUsersFromClosingPercent
+,cast((Maxusers-MinUsers) as float)/cast(Minusers as float) as OverallPercentGrowth
+,Maxusers-MinUsers as OverallActualGrowth
+,DATEDIFF(day, mindate,[Company Close Date]) DaysTakentoCloseAccount
+,case when ExpectedCount='11+' and MaxUsers >=11 then 1 
+ when ExpectedCount='4-10' and MaxUsers >=4 and MaxUsers<=10 then 1 
+ when ExpectedCount='1-3' and MaxUsers >=1 and MaxUsers<=3  then 1 
+else 0 end as ClientPredictedCorrectUsage
+,case when ExpectedCount='11+' and MaxUsers <11 then MaxUsers-11---see if you can use between
+ when ExpectedCount='4-10' and MaxUsers <4 then 4-MaxUsers-4
+ when ExpectedCount='1-3' and MaxUsers<1 then MaxUsers-1
+ when ExpectedCount='1-3' and MaxUsers >=3 then MaxUsers-3
+   when ExpectedCount='4-10' and MaxUsers >=10 then MaxUsers-10
+    when ExpectedCount='11+' and MaxUsers >=11 then MaxUsers-11
+else 0 end as AboveorBelowExpected
+,case when ClosingUserCount<=3 then '1-3'
+when ClosingUserCount>=4 and ClosingUserCount<=10then '4-10'
+when ClosingUserCount>=11 then '11+' else null end as ClosingUserRange
+,case when MaxUsers<=3 then '1-3'
+when MaxUsers>=4 and MaxUsers<=10then '4-10'
+when MaxUsers>=11 then '11+' else null end as FinalUserRange
+,DATEFROMPARTS(year([Company Close Date]),month([Company Close Date]),01) Month_of_Closing
+
+from NewStat)
+------Question 1 
+--select 
+--ClosingUserRange,
+--count(distinct [company id]) CompanyCount
+--from 
+--finaltableSEN
+--group by ClosingUserRange;
+
+-----------Question 2
+--select 
+--Month_of_Closing,
+--ClosingUserRange,
+--count(distinct [company id]) CompanyCount
+--from finaltableSEN
+--group by ClosingUserRange
+--,Month_of_Closing
+
+-------------------Question 3
+
+--select 
+--[company id]
+--,ClosingUserRange
+--,FinalUserRange
+--,case when (ClosingUserRange <>FinalUserRange) and FinalUserRange ='11+' then 1 else 0 end as FinalRange11
+--from finaltableSEN
+
+-------------------Question 4
+select
+Month_of_Closing
+,ExpectedCount
+,BeforeorAfterClosingHavingMaxUsers_Days
+,Growthusersfromclosingactual
+,Growthusersfromclosingpercent
+from finaltableSEN
+
+---------------Question 4B
+
+select
+distinct
+[company id]
+,[Marketing Data Expected User Count Simplified]
+,max(case when ClosingUserCount is not null then ClosingUserCount end) as ClosingUserCount
+,max(case when DaysPostCloseUsers30 is not null then DaysPostCloseUsers30 end) as DaysPostCloseUsers30
+,max(case when DaysPostCloseUsers60 is not null then DaysPostCloseUsers60 end) as DaysPostCloseUsers60
+,max(case when DaysPostCloseUsers90 is not null then DaysPostCloseUsers90 end) as DaysPostCloseUsers90
+,max(case when DaysPostCloseUsers30 is not null then DaysPostCloseUsers30 end)-max(case when ClosingUserCount is not null then ClosingUserCount end) as DaysPostCloseUsers30Actual
+,max(case when DaysPostCloseUsers60 is not null then DaysPostCloseUsers60 end)-max(case when DaysPostCloseUsers30 is not null then DaysPostCloseUsers30 end) as DaysPostCloseUsers60Actual
+,max(case when DaysPostCloseUsers90 is not null then DaysPostCloseUsers90 end)-max(case when DaysPostCloseUsers60 is not null then DaysPostCloseUsers60 end) as DaysPostCloseUsers90Actual
+,cast (max(case when DaysPostCloseUsers30 is not null then DaysPostCloseUsers30 end)-max(case when ClosingUserCount is not null then ClosingUserCount end) as float)/max(case when ClosingUserCount is not null then ClosingUserCount end) as DaysPostCloseUsers30Percent
+,cast (max(case when DaysPostCloseUsers60 is not null then DaysPostCloseUsers60 end)-max(case when DaysPostCloseUsers30 is not null then DaysPostCloseUsers30 end)as float)/max(case when DaysPostCloseUsers30 is not null then DaysPostCloseUsers30 end) as DaysPostCloseUsers60Percent
+,cast (max(case when DaysPostCloseUsers90 is not null then DaysPostCloseUsers90 end)-max(case when DaysPostCloseUsers60 is not null then DaysPostCloseUsers60 end) as float)/max(case when DaysPostCloseUsers60 is not null then DaysPostCloseUsers60 end)as DaysPostCloseUsers90Percent
+from(
+select dstat.[company id]
+,[Marketing Data Expected User Count Simplified]
+,cast([Daily Stats User Count] as float) Users
+,[Daily Stats Stat Date]
+,[Company Close Date]
+, DATEDIFF(day,[Company Close Date],[Daily Stats Stat Date]) DaysAfterClosing
+, case when  DATEDIFF(day,[Company Close Date],[Daily Stats Stat Date])=30 then cast([Daily Stats User Count] as float) else null end as DaysPostCloseUsers30
+, case when  DATEDIFF(day,[Company Close Date],[Daily Stats Stat Date])=60 then cast([Daily Stats User Count] as float) else null end as DaysPostCloseUsers60
+, case when  DATEDIFF(day,[Company Close Date],[Daily Stats Stat Date])=90 then cast([Daily Stats User Count] as float) else null end as DaysPostCloseUsers90
+,case when [Company Close Date]=[Daily Stats Stat Date] then cast([Daily Stats User Count] as float) else null end as ClosingUserCount
+from [daily-user-stats] dstat
+join companydetails cd
+on cd.[company id]=dstat.[company id]
+
+)a
+group by [company id]
+,[Marketing Data Expected User Count Simplified]
+order by 1 desc
+
+
+----Question 5
+select 
+[company id]
+,ExpectedCount
+,avg(Percent_change_Month_over_Month)
+from
+(
+
+
+select dstat.[company id]
+,[Marketing Data Expected User Count Simplified] as ExpectedCount
+,cast(min([Daily Stats User Count]) as float) minofUsers
+,cast(max([Daily Stats User Count]) as float) maxofUsers
+,DATEFROMPARTS(year([Daily Stats Stat Date]),month([Daily Stats Stat Date]),01) Month_of_Activity
+,(cast(max([Daily Stats User Count]) as float)-cast(min([Daily Stats User Count]) as float)) /cast(min([Daily Stats User Count]) as float) as Percent_change_Month_over_Month
+from [daily-user-stats] dstat
+left join companydetails cd
+on cd.[company id]=dstat.[company id]
+group by DATEFROMPARTS(year([Daily Stats Stat Date]),Month([Daily Stats Stat Date]),01)
+,dstat.[company id]
+,cd.[Marketing Data Expected User Count Simplified]
+)a 
+group by ExpectedCount
+,[company id]
